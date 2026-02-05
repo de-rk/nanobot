@@ -5,7 +5,6 @@ from typing import Any
 
 import litellm
 from litellm import acompletion
-import httpx
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
@@ -39,8 +38,8 @@ class LiteLLMProvider(LLMProvider):
             (api_base and "openrouter" in api_base)
         )
 
-        # Track if using custom endpoint (vLLM, etc.). Exclude NVIDIA integrate.
-        self.is_vllm = bool(api_base) and not self.is_openrouter and not self.is_nvidia
+        # Track if using custom endpoint (vLLM, etc.)
+        self.is_vllm = bool(api_base) and not self.is_openrouter
 
         # Configure LiteLLM based on provider
         if api_key:
@@ -50,16 +49,12 @@ class LiteLLMProvider(LLMProvider):
             elif self.is_vllm:
                 # vLLM/custom endpoint - uses OpenAI-compatible API
                 os.environ["OPENAI_API_KEY"] = api_key
-            elif "deepseek" in default_model:
-                os.environ.setdefault("DEEPSEEK_API_KEY", api_key)
             elif "anthropic" in default_model:
                 os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
             elif "openai" in default_model or "gpt" in default_model:
                 os.environ.setdefault("OPENAI_API_KEY", api_key)
             elif self.is_nvidia:
                 os.environ["NVIDIA_API_KEY"] = api_key
-                # Some NVIDIA integration paths expect the OpenAI-style env var
-                os.environ.setdefault("OPENAI_API_KEY", api_key)
             elif "gemini" in default_model.lower():
                 os.environ.setdefault("GEMINI_API_KEY", api_key)
             elif "zhipu" in default_model or "glm" in default_model or "zai" in default_model:
@@ -69,11 +64,6 @@ class LiteLLMProvider(LLMProvider):
 
         if api_base:
             litellm.api_base = api_base
-
-        # If NVIDIA mode detected but no api_base provided, use NVIDIA integrate default
-        if self.is_nvidia and not self.api_base:
-            self.api_base = "https://integrate.api.nvidia.com/v1"
-            litellm.api_base = self.api_base
 
         # Disable LiteLLM logging noise
         litellm.suppress_debug_info = True
@@ -100,6 +90,14 @@ class LiteLLMProvider(LLMProvider):
             LLMResponse with content and/or tool calls.
         """
         model = model or self.default_model
+
+        print(f"DEBUG: 原始模型: {model}")
+        print(f"DEBUG: is_nvidia: {self.is_nvidia}")
+        print(f"DEBUG: api_base: {self.api_base}")
+
+        if self.is_nvidia and not model.startswith("nvidia/"):
+            model = f"nvidia/{model}"
+            print(f"DEBUG: 处理后模型: {model}")
 
         # For OpenRouter, prefix model name if not already prefixed
         if not model.startswith("nvidia/"):
@@ -141,60 +139,7 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        # Determine at-call-time if this request should use NVIDIA Integrate
-        local_is_nvidia = self.is_nvidia or (model and model.startswith("nvidia/")) or (self.api_base and "integrate.api.nvidia.com" in self.api_base)
-
-        # If NVIDIA integrate, call the HTTP chat/completions endpoint directly
-        if local_is_nvidia:
-            api_base = self.api_base or "https://integrate.api.nvidia.com/v1"
-            url = f"{api_base.rstrip('/')}/chat/completions"
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-
-            payload = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            }
-
-            try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(url, json=payload, headers=headers)
-                # Raise for non-2xx to capture error body
-                resp.raise_for_status()
-                data = resp.json()
-
-                # Parse primary content
-                content = None
-                choices = data.get("choices") or []
-                if choices:
-                    ch0 = choices[0]
-                    msg = ch0.get("message") or {}
-                    if isinstance(msg, dict):
-                        content = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning")
-                    else:
-                        content = getattr(msg, "content", None)
-
-                usage = data.get("usage", {}) or {}
-                finish_reason = (choices[0].get("finish_reason") if choices else data.get("finish_reason")) or "stop"
-
-                return LLMResponse(
-                    content=content,
-                    tool_calls=[],
-                    finish_reason=finish_reason,
-                    usage=usage,
-                )
-            except httpx.HTTPStatusError as e:
-                return LLMResponse(content=f"Error calling LLM: {e.response.status_code} {e.response.text}", finish_reason="error")
-            except Exception as e:
-                return LLMResponse(content=f"Error calling LLM: {str(e)}", finish_reason="error")
-
         try:
-            # Pass api_key explicitly for providers that require it
-            if self.api_key:
-                kwargs["api_key"] = self.api_key
             response = await acompletion(**kwargs)
             return self._parse_response(response)
         except Exception as e:
