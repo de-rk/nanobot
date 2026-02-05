@@ -6,6 +6,7 @@ from typing import Any
 import litellm
 from litellm import acompletion
 import httpx
+import openai
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
@@ -147,47 +148,51 @@ class LiteLLMProvider(LLMProvider):
         # If NVIDIA integrate, call the HTTP chat/completions endpoint directly
         if local_is_nvidia:
             api_base = self.api_base or "https://integrate.api.nvidia.com/v1"
-            url = f"{api_base.rstrip('/')}/chat/completions"
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-
-            payload = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            }
-
+            client = openai.AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=api_base,
+            )
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(url, json=payload, headers=headers)
-                # Raise for non-2xx to capture error body
-                resp.raise_for_status()
-                data = resp.json()
-
-                # Parse primary content
-                content = None
-                choices = data.get("choices") or []
-                if choices:
-                    ch0 = choices[0]
-                    msg = ch0.get("message") or {}
-                    if isinstance(msg, dict):
-                        content = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning")
-                    else:
-                        content = getattr(msg, "content", None)
-
-                usage = data.get("usage", {}) or {}
-                finish_reason = (choices[0].get("finish_reason") if choices else data.get("finish_reason")) or "stop"
-
+                response = await client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    tools=tools if tools else None,
+                    tool_choice="auto" if tools else None,
+                )
+                # Parse the response
+                choice = response.choices[0]
+                message = choice.message
+                content = message.content
+                tool_calls = []
+                if hasattr(message, "tool_calls") and message.tool_calls:
+                    for tc in message.tool_calls:
+                        args = tc.function.arguments
+                        if isinstance(args, str):
+                            import json
+                            try:
+                                args = json.loads(args)
+                            except json.JSONDecodeError:
+                                args = {"raw": args}
+                        tool_calls.append(ToolCallRequest(
+                            id=tc.id,
+                            name=tc.function.name,
+                            arguments=args,
+                        ))
+                usage = {}
+                if hasattr(response, "usage") and response.usage:
+                    usage = {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens,
+                    }
                 return LLMResponse(
                     content=content,
-                    tool_calls=[],
-                    finish_reason=finish_reason,
+                    tool_calls=tool_calls,
+                    finish_reason=choice.finish_reason or "stop",
                     usage=usage,
                 )
-            except httpx.HTTPStatusError as e:
-                return LLMResponse(content=f"Error calling LLM: {e.response.status_code} {e.response.text}", finish_reason="error")
             except Exception as e:
                 return LLMResponse(content=f"Error calling LLM: {str(e)}", finish_reason="error")
 
