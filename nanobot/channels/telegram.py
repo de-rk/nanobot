@@ -92,126 +92,215 @@ class TelegramChannel(BaseChannel):
         self.groq_api_key = groq_api_key
         self._app: Application | None = None
         self._chat_ids: dict[str, int] = {}  # Map sender_id to chat_id for replies
+        self._polling_task: asyncio.Task | None = None
+        self._polling_started = False
     
     async def start(self) -> None:
-        """Start the Telegram bot with long polling."""
+        """Start the Telegram bot with long polling and robust error recovery."""
         if not self.config.token:
             logger.error("Telegram bot token not configured")
             return
         
         self._running = True
+        max_retries = 5
+        retry_count = 0
+        retry_backoff = 2  # Start with 2 second backoff
         
-        # Build the application
-        self._app = (
-            Application.builder()
-            .token(self.config.token)
-            .build()
-        )
-        
-        # Add message handler for text, photos, voice, documents
-        self._app.add_handler(
-            MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL) 
-                & ~filters.COMMAND, 
-                self._on_message
-            )
-        )
-        
-        # Add /start command handler
-        from telegram.ext import CommandHandler
-        self._app.add_handler(CommandHandler("start", self._on_start))
-        
-        logger.info("Starting Telegram bot (polling mode)...")
-        
-        # Initialize and start polling
-        await self._app.initialize()
-        await self._app.start()
-        
-        # Get bot info
-        bot_info = await self._app.bot.get_me()
-        logger.info(f"Telegram bot @{bot_info.username} connected")
-        
-        # Start polling (this runs until stopped)
-        try:
-            await self._app.updater.start_polling(
-                allowed_updates=["message"],
-                drop_pending_updates=True  # Ignore old messages on startup
-            )
-        except Conflict as e:
-            logger.error(
-                "Telegram polling conflict detected: another getUpdates client is running. "
-                "Ensure only one bot instance is running (stop other processes or containers)."
-            )
-            logger.debug(f"Telegram Conflict detail: {e}")
-
-            # Attempt to fetch webhook info for diagnostics (do not modify state)
+        while self._running and retry_count < max_retries:
             try:
-                import httpx
-                token = self.config.token
-                if token:
-                    webhook_url = f"https://api.telegram.org/bot{token}/getWebhookInfo"
-                    async with httpx.AsyncClient(timeout=10.0) as c:
-                        resp = await c.get(webhook_url)
-                    if resp.status_code == 200:
-                        logger.info(f"Telegram getWebhookInfo: {resp.text}")
+                # Build the application (fresh each retry)
+                self._app = (
+                    Application.builder()
+                    .token(self.config.token)
+                    .build()
+                )
+                
+                # Add message handler for text, photos, voice, documents
+                self._app.add_handler(
+                    MessageHandler(
+                        (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL)
+                        & ~filters.COMMAND, 
+                        self._on_message
+                    )
+                )
+                
+                # Add /start command handler
+                from telegram.ext import CommandHandler
+                self._app.add_handler(CommandHandler("start", self._on_start))
+                
+                logger.info("Starting Telegram bot (polling mode)...")
+                
+                # Initialize and start
+                await self._app.initialize()
+                await self._app.start()
+                
+                # Get bot info
+                bot_info = await self._app.bot.get_me()
+                logger.info(f"Telegram bot @{bot_info.username} connected")
+                
+                # Start polling in a separate task so we can monitor it
+                self._polling_task = asyncio.create_task(
+                    self._app.updater.start_polling(
+                        allowed_updates=["message"],
+                        drop_pending_updates=True
+                    )
+                )
+                
+                self._polling_started = True
+                retry_count = 0  # Reset retry count on success
+                logger.info("Telegram polling started successfully")
+                
+                # Monitor polling task - wait for it to complete or for stop signal
+                while self._running:
+                    try:
+                        # Check if polling task is still running
+                        if self._polling_task.done():
+                            # Polling task ended unexpectedly
+                            try:
+                                # This will raise the exception if task failed
+                                await asyncio.wait_for(self._polling_task, timeout=0.1)
+                            except (asyncio.TimeoutError, asyncio.CancelledError):
+                                pass
+                            except Conflict as e:
+                                logger.error(f"Polling conflict detected: {e}")
+                                raise e
+                            except Exception as e:
+                                logger.error(f"Polling task failed unexpectedly: {type(e).__name__}: {e}")
+                                raise e
+                        
+                        # Normal monitoring sleep
+                        await asyncio.sleep(5)
+                    except asyncio.CancelledError:
+                        logger.info("Polling monitor cancelled")
+                        break
+                    except (Conflict, Exception):
+                        # Re-raise to outer exception handler for retry logic
+                        raise
+                
+                # Normal exit
+                break
+                
+            except Conflict as e:
+                logger.error(
+                    f"Telegram polling conflict: another getUpdates client running "
+                    f"(attempt {retry_count + 1}/{max_retries})"
+                )
+                logger.debug(f"Conflict detail: {e}")
+                
+                # Cleanup on conflict
+                self._polling_started = False
+                if self._polling_task:
+                    self._polling_task.cancel()
+                    self._polling_task = None
+                
+                if self._app:
+                    try:
+                        await self._app.stop()
+                        await self._app.shutdown()
+                    except Exception as cleanup_err:
+                        logger.debug(f"Cleanup error: {cleanup_err}")
+                    self._app = None
+                
+                # Attempt diagnostic
+                try:
+                    import httpx
+                    token = self.config.token
+                    if token:
+                        webhook_url = f"https://api.telegram.org/bot{token}/getWebhookInfo"
+                        async with httpx.AsyncClient(timeout=5.0) as c:
+                            resp = await c.get(webhook_url)
+                        if resp.status_code == 200:
+                            logger.info(f"Webhook info: {resp.text}")
+                except Exception as diagnostic_err:
+                    logger.debug(f"Diagnostic check failed: {diagnostic_err}")
+                
+                # Exponential backoff retry
+                retry_count += 1
+                if retry_count < max_retries and self._running:
+                    wait_time = retry_backoff ** retry_count
+                    logger.info(f"Retrying in {wait_time}s... ({retry_count}/{max_retries})")
+                    await asyncio.sleep(wait_time)
                 else:
-                    logger.debug("No telegram token available for webhook diagnostics")
-            except Exception as de:
-                logger.debug(f"Failed to fetch webhook info: {de}")
-
-            # Try a few retries with backoff in case of transient termination by another client
-            retry_waits = [1, 2, 4]
-            for wait in retry_waits:
-                if not self._running:
+                    logger.error(
+                        "Max retries reached for Telegram polling. "
+                        "Please check:\n"
+                        "  1. Kill other bot processes: pkill -f 'python.*nanobot'\n"
+                        "  2. Check Docker: docker ps | grep telegram\n"
+                        "  3. Disable webhook: curl https://api.telegram.org/bot{token}/deleteWebhook"
+                    )
                     break
-                logger.info(f"Retrying polling in {wait}s...")
-                await asyncio.sleep(wait)
-                try:
-                    await self._app.updater.start_polling(allowed_updates=["message"], drop_pending_updates=True)
-                    logger.info("Polling started after retry")
+                    
+            except Exception as e:
+                logger.error(f"Telegram error (attempt {retry_count + 1}/{max_retries}): {type(e).__name__}: {e}")
+                
+                # Cleanup
+                self._polling_started = False
+                if self._polling_task:
+                    self._polling_task.cancel()
+                    self._polling_task = None
+                
+                if self._app:
+                    try:
+                        await self._app.stop()
+                        await self._app.shutdown()
+                    except Exception:
+                        pass
+                    self._app = None
+                
+                retry_count += 1
+                if retry_count < max_retries and self._running:
+                    wait_time = retry_backoff ** retry_count
+                    logger.info(f"Retrying in {wait_time}s... ({retry_count}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Telegram channel stopped after {retry_count} failed attempts")
                     break
-                except Conflict:
-                    logger.warning("Polling still in conflict; will retry or exit")
-                    continue
-
-            # If still running but polling not started, stop and cleanup
-            if self._app:
-                logger.info("Stopping Telegram app due to persistent conflict")
-                self._running = False
-                try:
-                    await self._app.stop()
-                    await self._app.shutdown()
-                except Exception:
-                    pass
-                self._app = None
-
-            # Provide user actionable suggestion in logs
-            logger.error(
-                "Persistent Conflict: Another polling client likely running. "
-                "Run `pgrep -af python | grep -i telegram` or check Docker/Services and stop the other instance. "
-                "If you use webhooks, run getWebhookInfo to inspect webhook settings."
-            )
-            return
         
-        # Keep running until stopped
-        while self._running:
-            await asyncio.sleep(1)
-    
+        # Final cleanup
+        self._polling_started = False
+        if self._polling_task:
+            self._polling_task.cancel()
+            self._polling_task = None
     async def stop(self) -> None:
-        """Stop the Telegram bot."""
+        """Stop the Telegram bot cleanly."""
+        logger.info("Stopping Telegram bot...")
         self._running = False
         
+        # Cancel polling task if running
+        if self._polling_task and not self._polling_task.done():
+            self._polling_task.cancel()
+            try:
+                await asyncio.wait_for(self._polling_task, timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+        
+        self._polling_task = None
+        
+        # Stop the app
         if self._app:
-            logger.info("Stopping Telegram bot...")
-            await self._app.updater.stop()
-            await self._app.stop()
-            await self._app.shutdown()
-            self._app = None
+            try:
+                logger.debug("Stopping updater...")
+                await self._app.updater.stop()
+                logger.debug("Stopping app...")
+                await self._app.stop()
+                logger.debug("Shutting down app...")
+                await self._app.shutdown()
+            except Exception as e:
+                logger.warning(f"Error during Telegram cleanup: {e}")
+            finally:
+                self._app = None
+        
+        self._polling_started = False
+        logger.info("Telegram bot stopped")
     
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Telegram."""
         if not self._app:
-            logger.warning("Telegram bot not running")
+            logger.warning("Telegram bot not initialized or stopped")
+            return
+        
+        if not self._polling_started:
+            logger.warning("Telegram polling not active, cannot send message")
             return
         
         try:
@@ -224,18 +313,19 @@ class TelegramChannel(BaseChannel):
                 text=html_content,
                 parse_mode="HTML"
             )
+            logger.debug(f"Message sent to {chat_id}")
         except ValueError:
             logger.error(f"Invalid chat_id: {msg.chat_id}")
         except Exception as e:
-            # Fallback to plain text if HTML parsing fails
-            logger.warning(f"HTML parse failed, falling back to plain text: {e}")
+            logger.warning(f"Failed to send HTML message: {type(e).__name__}: {e}, falling back to plain text")
             try:
                 await self._app.bot.send_message(
                     chat_id=int(msg.chat_id),
                     text=msg.content
                 )
+                logger.debug(f"Plain text message sent to {msg.chat_id}")
             except Exception as e2:
-                logger.error(f"Error sending Telegram message: {e2}")
+                logger.error(f"Failed to send plain text message: {type(e2).__name__}: {e2}")
     
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
