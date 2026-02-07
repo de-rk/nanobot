@@ -14,6 +14,49 @@ from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import TelegramConfig
 
 
+def _split_long_message(text: str, max_length: int = 4096) -> list[str]:
+    """
+    Split a message into chunks that fit Telegram's character limit.
+    
+    Tries to split at paragraph boundaries to maintain readability.
+    Max length for Telegram is 4096 characters per message.
+    """
+    if len(text) <= max_length:
+        return [text]
+    
+    chunks = []
+    remaining = text
+    
+    while len(remaining) > max_length:
+        # Try to split at double newline (paragraph boundary)
+        chunk = remaining[:max_length]
+        split_pos = chunk.rfind('\n\n')
+        
+        if split_pos > max_length * 0.7:  # Found a paragraph break in the last 30%
+            split_pos += 2  # Include the newlines
+        else:
+            # Try to split at single newline
+            split_pos = chunk.rfind('\n')
+            if split_pos > max_length * 0.7:
+                split_pos += 1
+            else:
+                # Try to split at space
+                split_pos = chunk.rfind(' ')
+                if split_pos <= max_length * 0.7:
+                    # Last resort: split at max_length
+                    split_pos = max_length
+                else:
+                    split_pos += 1
+        
+        chunks.append(remaining[:split_pos].rstrip())
+        remaining = remaining[split_pos:].lstrip()
+    
+    if remaining:
+        chunks.append(remaining)
+    
+    return chunks
+
+
 def _markdown_to_telegram_html(text: str) -> str:
     """
     Convert markdown to Telegram-safe HTML.
@@ -224,7 +267,7 @@ class TelegramChannel(BaseChannel):
                 self._app = None
     
     async def send(self, msg: OutboundMessage) -> None:
-        """Send a message through Telegram."""
+        """Send a message through Telegram, splitting if necessary."""
         if not self._app or not self._polling_started:
             logger.warning("Telegram bot not ready to send messages")
             return
@@ -232,22 +275,38 @@ class TelegramChannel(BaseChannel):
         try:
             chat_id = int(msg.chat_id)
             html_content = _markdown_to_telegram_html(msg.content)
-            await self._app.bot.send_message(
-                chat_id=chat_id,
-                text=html_content,
-                parse_mode="HTML"
-            )
+            
+            # Split message if it exceeds Telegram's 4096 character limit
+            message_chunks = _split_long_message(html_content, max_length=4096)
+            
+            if len(message_chunks) > 1:
+                logger.info(f"Message too long ({len(html_content)} chars), splitting into {len(message_chunks)} parts")
+            
+            for i, chunk in enumerate(message_chunks, 1):
+                try:
+                    await self._app.bot.send_message(
+                        chat_id=chat_id,
+                        text=chunk,
+                        parse_mode="HTML"
+                    )
+                except Exception as chunk_error:
+                    # If HTML formatting fails, try plain text
+                    if "parse mode" in str(chunk_error).lower():
+                        try:
+                            await self._app.bot.send_message(
+                                chat_id=chat_id,
+                                text=chunk
+                            )
+                        except Exception as plain_error:
+                            logger.error(f"Failed to send message chunk {i}/{len(message_chunks)}: {plain_error}")
+                            raise
+                    else:
+                        raise
+                        
         except ValueError:
             logger.error(f"Invalid chat_id: {msg.chat_id}")
         except Exception as e:
-            # Fallback to plain text
-            try:
-                await self._app.bot.send_message(
-                    chat_id=int(msg.chat_id),
-                    text=msg.content
-                )
-            except Exception:
-                logger.error(f"Failed to send message: {e}")
+            logger.error(f"Failed to send message: {e}")
     
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
