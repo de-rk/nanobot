@@ -1,0 +1,19 @@
+[Unit]
+Description=Nanobot AI Assistant
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/nanobot
+ExecStart=/usr/local/bin/nanobot serve
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/nanobot/stdout.log
+StandardError=append:/var/log/nanobot/stderr.log
+
+# Environment variables (if needed)
+# Environment="NANOBOT_CONFIG=/path/to/config.json"
+
+[Install]
+WantedBy=multi-user.target

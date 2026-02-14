@@ -267,20 +267,67 @@ def gateway(
 
     console.print(f"[green]✓[/green] Heartbeat: every 30m")
 
+    # Configure logging to file
+    from loguru import logger
+    import sys
+
+    log_dir = config.workspace_path / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "nanobot.log"
+
+    # Remove default handler and add file + stderr
+    logger.remove()
+    logger.add(
+        log_file,
+        rotation="10 MB",
+        retention="7 days",
+        level="INFO",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
+    )
+    logger.add(
+        sys.stderr,
+        level="INFO",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {message}"
+    )
+
+    console.print(f"[green]✓[/green] Logging to {log_file}")
+    logger.info("Nanobot service starting...")
+
     async def run():
         try:
             await cron.start()
             await heartbeat.start()
-            await asyncio.gather(
+
+            # Run main tasks - keep running even if one fails
+            results = await asyncio.gather(
                 agent.run(),
                 channels.start_all(),
+                return_exceptions=True
             )
+
+            # Check for exceptions
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    task_name = ["agent", "channels"][i]
+                    logger.error(f"{task_name} task failed: {result}")
+                    raise result
+
         except KeyboardInterrupt:
             console.print("\nShutting down...")
+            logger.info("Shutdown requested by user")
+        except Exception as e:
+            logger.exception(f"Fatal error in main loop: {e}")
+            console.print(f"[red]Fatal error: {e}[/red]")
+            console.print(f"[yellow]Check logs at: {log_file}[/yellow]")
+            raise
+        finally:
+            # Always cleanup
+            logger.info("Cleaning up services...")
             heartbeat.stop()
             cron.stop()
             agent.stop()
             await channels.stop_all()
+            logger.info("Shutdown complete")
 
     asyncio.run(run())
 
