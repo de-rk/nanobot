@@ -248,7 +248,8 @@ def gateway(
         workspace=config.workspace_path,
         on_heartbeat=on_heartbeat,
         interval_s=30 * 60,  # 30 minutes
-        enabled=True
+        enabled=True,
+        session_manager=agent.session_manager  # Pass session manager for cache cleanup
     )
 
     # Create channel manager

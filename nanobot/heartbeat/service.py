@@ -49,13 +49,16 @@ class HeartbeatService:
         on_heartbeat: Callable[[str], Coroutine[Any, Any, str]] | None = None,
         interval_s: int = DEFAULT_HEARTBEAT_INTERVAL_S,
         enabled: bool = True,
+        session_manager: Any = None,  # Optional SessionManager for cache cleanup
     ):
         self.workspace = workspace
         self.on_heartbeat = on_heartbeat
         self.interval_s = interval_s
         self.enabled = enabled
+        self.session_manager = session_manager
         self._running = False
         self._task: asyncio.Task | None = None
+        self._tick_count = 0
     
     @property
     def heartbeat_file(self) -> Path:
@@ -101,25 +104,37 @@ class HeartbeatService:
     
     async def _tick(self) -> None:
         """Execute a single heartbeat tick."""
+        self._tick_count += 1
+
+        # Flush session cache every 4 heartbeats (every 2 hours by default)
+        if self.session_manager and self._tick_count % 4 == 0:
+            try:
+                stats = self.session_manager.get_cache_stats()
+                logger.info(f"Session cache stats: {stats}")
+                self.session_manager.flush_cache()
+                logger.info("Session cache flushed to prevent memory leaks")
+            except Exception as e:
+                logger.error(f"Failed to flush session cache: {e}")
+
         content = self._read_heartbeat_file()
-        
+
         # Skip if HEARTBEAT.md is empty or doesn't exist
         if _is_heartbeat_empty(content):
             logger.debug("Heartbeat: no tasks (HEARTBEAT.md empty)")
             return
-        
+
         logger.info("Heartbeat: checking for tasks...")
-        
+
         if self.on_heartbeat:
             try:
                 response = await self.on_heartbeat(HEARTBEAT_PROMPT)
-                
+
                 # Check if agent said "nothing to do"
                 if HEARTBEAT_OK_TOKEN.replace("_", "") in response.upper().replace("_", ""):
                     logger.info("Heartbeat: OK (no action needed)")
                 else:
                     logger.info(f"Heartbeat: completed task")
-                    
+
             except Exception as e:
                 logger.error(f"Heartbeat execution failed: {e}")
     

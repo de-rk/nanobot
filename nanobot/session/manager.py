@@ -5,6 +5,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from collections import OrderedDict
 
 from loguru import logger
 
@@ -61,14 +62,16 @@ class Session:
 class SessionManager:
     """
     Manages conversation sessions.
-    
+
     Sessions are stored as JSONL files in the sessions directory.
+    Uses LRU cache to prevent memory leaks.
     """
-    
-    def __init__(self, workspace: Path):
+
+    def __init__(self, workspace: Path, max_cache_size: int = 100):
         self.workspace = workspace
         self.sessions_dir = ensure_dir(Path.home() / ".nanobot" / "sessions")
-        self._cache: dict[str, Session] = {}
+        self._cache: OrderedDict[str, Session] = OrderedDict()
+        self.max_cache_size = max_cache_size
     
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
@@ -78,23 +81,34 @@ class SessionManager:
     def get_or_create(self, key: str) -> Session:
         """
         Get an existing session or create a new one.
-        
+
         Args:
             key: Session key (usually channel:chat_id).
-        
+
         Returns:
             The session.
         """
-        # Check cache
+        # Check cache (and move to end for LRU)
         if key in self._cache:
+            self._cache.move_to_end(key)
             return self._cache[key]
-        
+
         # Try to load from disk
         session = self._load(key)
         if session is None:
             session = Session(key=key)
-        
+
+        # Add to cache with LRU eviction
         self._cache[key] = session
+        self._cache.move_to_end(key)
+
+        # Evict oldest if cache is full
+        if len(self._cache) > self.max_cache_size:
+            # Save and remove oldest session
+            oldest_key, oldest_session = self._cache.popitem(last=False)
+            self._save(oldest_session)
+            logger.debug(f"Evicted session {oldest_key} from cache (LRU)")
+
         return session
     
     def _load(self, key: str) -> Session | None:
@@ -135,8 +149,15 @@ class SessionManager:
     
     def save(self, session: Session) -> None:
         """Save a session to disk."""
+        self._save(session)
+        # Update cache position for LRU
+        if session.key in self._cache:
+            self._cache.move_to_end(session.key)
+
+    def _save(self, session: Session) -> None:
+        """Internal save method."""
         path = self._get_session_path(session.key)
-        
+
         with open(path, "w") as f:
             # Write metadata first
             metadata_line = {
@@ -146,12 +167,10 @@ class SessionManager:
                 "metadata": session.metadata
             }
             f.write(json.dumps(metadata_line) + "\n")
-            
+
             # Write messages
             for msg in session.messages:
                 f.write(json.dumps(msg) + "\n")
-        
-        self._cache[session.key] = session
     
     def delete(self, key: str) -> bool:
         """
@@ -200,3 +219,24 @@ class SessionManager:
                 continue
         
         return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
+
+    def flush_cache(self) -> None:
+        """
+        Save all cached sessions to disk and clear the cache.
+        Useful for periodic cleanup to prevent memory leaks.
+        """
+        logger.info(f"Flushing {len(self._cache)} sessions from cache")
+        for session in self._cache.values():
+            try:
+                self._save(session)
+            except Exception as e:
+                logger.error(f"Failed to save session {session.key}: {e}")
+        self._cache.clear()
+
+    def get_cache_stats(self) -> dict[str, Any]:
+        """Get cache statistics for monitoring."""
+        return {
+            "cached_sessions": len(self._cache),
+            "max_cache_size": self.max_cache_size,
+            "cache_usage_percent": (len(self._cache) / self.max_cache_size * 100) if self.max_cache_size > 0 else 0
+        }
