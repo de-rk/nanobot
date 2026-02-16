@@ -156,7 +156,6 @@ class ChannelManager:
         # Start all channels with auto-restart on failure
         tasks = []
         for name, channel in self.channels.items():
-            logger.info(f"Starting {name} channel...")
             tasks.append(asyncio.create_task(self._run_channel_with_restart(name, channel)))
 
         # Wait for all to complete (they should run forever)
