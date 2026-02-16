@@ -327,17 +327,6 @@ def gateway(
 
     bus = MessageBus()
 
-    # If user intends to use NVIDIA models, validate NVIDIA provider settings
-    model = config.agents.defaults.model
-    if model and model.startswith("nvidia/"):
-        from nanobot.config.loader import validate_nvidia_config
-        valid, msg = validate_nvidia_config(config)
-        if not valid:
-            console.print(f"[red]NVIDIA config error:[/red] {msg}")
-            raise typer.Exit(1)
-        if msg:
-            console.print(f"[yellow]{msg}[/yellow]")
-
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
 
@@ -496,17 +485,6 @@ def agent(
     from nanobot.agent.loop import AgentLoop
 
     config = load_config()
-
-    # If user intends to use NVIDIA models, validate NVIDIA provider settings
-    model = config.agents.defaults.model
-    if model and model.startswith("nvidia/"):
-        from nanobot.config.loader import validate_nvidia_config
-        valid, msg = validate_nvidia_config(config)
-        if not valid:
-            console.print(f"[red]NVIDIA config error:[/red] {msg}")
-            raise typer.Exit(1)
-        if msg:
-            console.print(f"[yellow]{msg}[/yellow]")
 
     from loguru import logger
 
