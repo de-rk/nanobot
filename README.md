@@ -445,6 +445,66 @@ docker run -v ~/.nanobot:/root/.nanobot --rm nanobot agent -m "Hello!"
 docker run -v ~/.nanobot:/root/.nanobot --rm nanobot status
 ```
 
+## 🚀 Production Deployment (Systemd)
+
+For production environments, you can run nanobot as a systemd service that starts automatically on boot.
+
+**Method 1: Using CLI command (Recommended)**
+
+```bash
+# Install and enable service
+nanobot install-service
+
+# Start the service
+sudo systemctl start nanobot
+
+# Check status
+sudo systemctl status nanobot
+```
+
+**Method 2: Using installation script**
+
+```bash
+# Run the installation script (auto-detects paths and installs)
+./install.sh
+```
+
+Both methods will:
+- Detect your current user and nanobot installation path
+- Create log directory at `/var/log/nanobot`
+- Generate and install systemd service file with memory limits (2GB max)
+- Enable and start the service automatically
+
+**Service Management:**
+
+```bash
+# Check service status
+sudo systemctl status nanobot
+
+# View logs (real-time)
+sudo journalctl -u nanobot -f
+
+# View log files
+tail -f /var/log/nanobot/stdout.log
+tail -f /var/log/nanobot/stderr.log
+
+# Restart service
+sudo systemctl restart nanobot
+
+# Stop service
+sudo systemctl stop nanobot
+
+# Disable auto-start
+sudo systemctl disable nanobot
+
+# Uninstall service
+nanobot uninstall-service
+```
+
+> [!NOTE]
+> The service runs `nanobot gateway` command, which starts the gateway and all enabled channels.
+> Memory limits (2GB max, 1.5GB high) are configured to prevent system crashes from memory leaks.
+
 ## 📁 Project Structure
 
 ```
