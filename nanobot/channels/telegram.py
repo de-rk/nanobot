@@ -144,27 +144,45 @@ class TelegramChannel(BaseChannel):
         await self._app.start()
 
         # Clear any existing webhooks to prevent conflicts
-        try:
-            await self._app.bot.delete_webhook(drop_pending_updates=True)
-            logger.debug("Cleared any existing webhooks")
-        except Exception as e:
-            logger.warning(f"Failed to clear webhooks: {e}")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await self._app.bot.delete_webhook(drop_pending_updates=True)
+                logger.debug("Cleared any existing webhooks")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 5
+                    logger.warning(f"Failed to clear webhooks (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.warning(f"Failed to clear webhooks after {max_retries} attempts: {e}")
 
         # Get bot info and register command menu
         bot_info = await self._app.bot.get_me()
         logger.info(f"Telegram bot @{bot_info.username} connected")
-        
+
         try:
             await self._app.bot.set_my_commands(self.BOT_COMMANDS)
             logger.debug("Telegram bot commands registered")
         except Exception as e:
             logger.warning(f"Failed to register bot commands: {e}")
-        
-        # Start polling (this runs until stopped)
-        await self._app.updater.start_polling(
-            allowed_updates=["message"],
-            drop_pending_updates=True  # Ignore old messages on startup
-        )
+
+        # Start polling with retry on conflict
+        for attempt in range(max_retries):
+            try:
+                await self._app.updater.start_polling(
+                    allowed_updates=["message"],
+                    drop_pending_updates=True  # Ignore old messages on startup
+                )
+                break
+            except Exception as e:
+                if "Conflict" in str(e) and attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 10
+                    logger.warning(f"Polling conflict detected (attempt {attempt + 1}/{max_retries}). Waiting {wait_time}s for other instances to timeout...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    raise
         
         # Keep running until stopped
         while self._running:
