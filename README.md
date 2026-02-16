@@ -449,7 +449,7 @@ docker run -v ~/.nanobot:/root/.nanobot --rm nanobot status
 
 For production environments, you can run nanobot as a systemd service that starts automatically on boot.
 
-**Method 1: Using CLI command (Recommended)**
+**Installation:**
 
 ```bash
 # Install and enable service
@@ -462,18 +462,11 @@ sudo systemctl start nanobot
 sudo systemctl status nanobot
 ```
 
-**Method 2: Using installation script**
-
-```bash
-# Run the installation script (auto-detects paths and installs)
-./install.sh
-```
-
-Both methods will:
+The installation will:
 - Detect your current user and nanobot installation path
 - Create log directory at `~/.nanobot/workspace/logs`
 - Generate and install systemd service file with memory limits (2GB max)
-- Enable and start the service automatically
+- Enable the service to start automatically on boot
 
 **Service Management:**
 
