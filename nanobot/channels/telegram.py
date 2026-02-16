@@ -6,7 +6,6 @@ import asyncio
 import re
 from loguru import logger
 from telegram import BotCommand, Update
-from telegram.error import Conflict
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest
 
@@ -14,108 +13,6 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import TelegramConfig
-
-
-def _split_long_message(text: str, max_length: int = 4096) -> list[str]:
-    """
-    Split a message into chunks that fit Telegram's character limit.
-
-    Tries to split at paragraph boundaries to maintain readability.
-    Ensures HTML tags are not broken across chunks.
-    Max length for Telegram is 4096 characters per message.
-    """
-    if len(text) <= max_length:
-        return [text]
-
-    chunks = []
-    remaining = text
-
-    while len(remaining) > max_length:
-        # Try to split at double newline (paragraph boundary)
-        chunk = remaining[:max_length]
-        split_pos = chunk.rfind('\n\n')
-
-        if split_pos > max_length * 0.7:  # Found a paragraph break in the last 30%
-            split_pos += 2  # Include the newlines
-        else:
-            # Try to split at single newline
-            split_pos = chunk.rfind('\n')
-            if split_pos > max_length * 0.7:
-                split_pos += 1
-            else:
-                # Try to split at space
-                split_pos = chunk.rfind(' ')
-                if split_pos <= max_length * 0.7:
-                    # Last resort: split at max_length
-                    split_pos = max_length
-                else:
-                    split_pos += 1
-
-        # Check if we're splitting inside an HTML tag
-        split_pos = _adjust_split_for_html_tags(remaining, split_pos)
-
-        # Get unclosed tags before split point
-        unclosed_tags = _get_unclosed_tags(remaining[:split_pos])
-
-        # Close unclosed tags at the end of this chunk
-        chunk_text = remaining[:split_pos].rstrip()
-        if unclosed_tags:
-            chunk_text += ''.join(f'</{tag}>' for tag in reversed(unclosed_tags))
-
-        chunks.append(chunk_text)
-
-        # Reopen tags at the start of next chunk
-        remaining = remaining[split_pos:].lstrip()
-        if unclosed_tags and remaining:
-            remaining = ''.join(f'<{tag}>' for tag in unclosed_tags) + remaining
-
-    if remaining:
-        chunks.append(remaining)
-
-    return chunks
-
-
-def _adjust_split_for_html_tags(text: str, split_pos: int) -> int:
-    """
-    Adjust split position to avoid breaking inside HTML tags.
-    If split_pos is inside a tag, move it before the tag.
-    """
-    # Check if we're inside a tag by looking backwards for < and >
-    last_open = text[:split_pos].rfind('<')
-    last_close = text[:split_pos].rfind('>')
-
-    # If last < is after last >, we're inside a tag
-    if last_open > last_close:
-        # Move split position before the tag
-        return last_open
-
-    return split_pos
-
-
-def _get_unclosed_tags(text: str) -> list[str]:
-    """
-    Find HTML tags that are opened but not closed in the text.
-    Returns list of tag names in order they were opened.
-    """
-    # Telegram supports: b, i, u, s, a, code, pre
-    tag_stack = []
-
-    # Find all tags in order
-    tag_pattern = r'<(/?)(\w+)(?:\s[^>]*)?>'
-    for match in re.finditer(tag_pattern, text):
-        is_closing = match.group(1) == '/'
-        tag_name = match.group(2)
-
-        if is_closing:
-            # Remove from stack if it matches
-            if tag_stack and tag_stack[-1] == tag_name:
-                tag_stack.pop()
-        else:
-            # Add to stack (skip self-closing tags like <br/>)
-            if tag_name not in ['br', 'hr']:
-                tag_stack.append(tag_name)
-
-    return tag_stack
 
 
 def _markdown_to_telegram_html(text: str) -> str:
@@ -208,22 +105,16 @@ class TelegramChannel(BaseChannel):
         self.groq_api_key = groq_api_key
         self._app: Application | None = None
         self._chat_ids: dict[str, int] = {}  # Map sender_id to chat_id for replies
-        self._polling_started = False
-        self._last_conflict_time = 0  # Track last conflict for debouncing
         self._typing_tasks: dict[str, asyncio.Task] = {}  # chat_id -> typing loop task
     
     async def start(self) -> None:
-        """Start the Telegram bot with long polling (lightweight version)."""
+        """Start the Telegram bot with long polling."""
         if not self.config.token:
             logger.error("Telegram bot token not configured")
             return
         
         self._running = True
-        retry_count = 0
-        max_retries = 3
-        consecutive_failures = 0
-        max_consecutive_failures = 10  # Track consecutive failures for exponential backoff
-
+        
         # Build the application with larger connection pool to avoid pool-timeout on long runs
         req = HTTPXRequest(connection_pool_size=16, pool_timeout=5.0, connect_timeout=30.0, read_timeout=30.0)
         builder = Application.builder().token(self.config.token).request(req).get_updates_request(req)
@@ -231,37 +122,37 @@ class TelegramChannel(BaseChannel):
             builder = builder.proxy(self.config.proxy).get_updates_proxy(self.config.proxy)
         self._app = builder.build()
         self._app.add_error_handler(self._on_error)
-
+        
         # Add command handlers
         self._app.add_handler(CommandHandler("start", self._on_start))
         self._app.add_handler(CommandHandler("new", self._forward_command))
         self._app.add_handler(CommandHandler("help", self._forward_command))
-
+        
         # Add message handler for text, photos, voice, documents
         self._app.add_handler(
             MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL)
-                & ~filters.COMMAND,
+                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL) 
+                & ~filters.COMMAND, 
                 self._on_message
             )
         )
-
+        
         logger.info("Starting Telegram bot (polling mode)...")
-
+        
         # Initialize and start polling
         await self._app.initialize()
         await self._app.start()
-
+        
         # Get bot info and register command menu
         bot_info = await self._app.bot.get_me()
         logger.info(f"Telegram bot @{bot_info.username} connected")
-
+        
         try:
             await self._app.bot.set_my_commands(self.BOT_COMMANDS)
             logger.debug("Telegram bot commands registered")
         except Exception as e:
             logger.warning(f"Failed to register bot commands: {e}")
-
+        
         # Start polling (this runs until stopped)
         await self._app.updater.start_polling(
             allowed_updates=["message"],
@@ -269,254 +160,55 @@ class TelegramChannel(BaseChannel):
         )
         
         # Keep running until stopped
->>>>>>> upstream/main
         while self._running:
-            try:
-                # Build the application with connection pool timeout
-                self._app = (
-                    Application.builder()
-                    .token(self.config.token)
-                    .connect_timeout(30.0)
-                    .read_timeout(30.0)
-                    .write_timeout(30.0)
-                    .pool_timeout(30.0)
-                    .build()
-                )
-                
-                # Add message handler
-                self._app.add_handler(
-                    MessageHandler(
-                        (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL)
-                        & ~filters.COMMAND, 
-                        self._on_message
-                    )
-                )
-                
-                # Add /start command handler
-                from telegram.ext import CommandHandler
-                self._app.add_handler(CommandHandler("start", self._on_start))
-                
-                logger.info("Starting Telegram bot (polling mode)...")
-
-                # Initialize and start
-                await self._app.initialize()
-                await self._app.start()
-
-                # Clear any existing webhooks or connections
-                try:
-                    await self._app.bot.delete_webhook(drop_pending_updates=True)
-                    logger.debug("Cleared any existing webhooks")
-                except Exception as webhook_error:
-                    logger.debug(f"Webhook cleanup: {webhook_error}")
-
-                # Get bot info
-                bot_info = await self._app.bot.get_me()
-                logger.info(f"Telegram bot @{bot_info.username} connected")
-
-                # Start polling and wait for it to run
-                self._polling_started = True
-                consecutive_failures = 0  # Reset on successful connection
-                logger.info("Telegram polling active")
-
-                await self._app.updater.start_polling(
-                    allowed_updates=["message"],
-                    drop_pending_updates=True
-                )
-
-                # Keep running until stopped - polling runs in background
-                while self._running and self._polling_started:
-                    await asyncio.sleep(1)
-
-                    # Check if updater is still running
-                    if not self._app.updater.running:
-                        logger.warning("Updater stopped running")
-                        break
-
-                # If we get here, polling was stopped
-                if not self._running:
-                    # User requested shutdown
-                    logger.info("Telegram polling stopped by user request")
-                    break
-                else:
-                    # Unexpected stop, clean up and retry
-                    self._polling_started = False
-                    logger.warning("Telegram polling stopped unexpectedly, cleaning up...")
-
-                    # Clean up the application completely
-                    if self._app:
-                        try:
-                            await self._app.updater.stop()
-                            await self._app.stop()
-                            await self._app.shutdown()
-                        except Exception as cleanup_error:
-                            logger.debug(f"Cleanup error (expected): {cleanup_error}")
-                        self._app = None
-
-                    # Wait longer to ensure old instance is fully released
-                    consecutive_failures += 1
-                    wait_time = min(2 ** consecutive_failures, 60)
-                    logger.info(f"Will retry in {wait_time}s...")
-                    await asyncio.sleep(wait_time)
-                
-            except Conflict as e:
-                self._polling_started = False
-                retry_count += 1
-                consecutive_failures += 1
-
-                logger.error(
-                    f"Telegram polling conflict (attempt {retry_count}/{max_retries}): {e}"
-                )
-                logger.warning(
-                    "Another bot instance detected. This usually means:\n"
-                    "  1. A previous instance didn't shut down cleanly\n"
-                    "  2. The bot is running elsewhere (another server/container)\n"
-                    "  3. Telegram server hasn't released the old connection yet"
-                )
-
-                # Clean up on conflict - must stop updater first
-                if self._app:
-                    try:
-                        await self._app.updater.stop()
-                        await self._app.stop()
-                        await self._app.shutdown()
-                    except Exception as cleanup_error:
-                        logger.debug(f"Cleanup error (expected): {cleanup_error}")
-                    self._app = None
-
-                # Retry with increasing delay - conflicts need longer waits
-                if self._running:
-                    # For conflicts, use longer backoff (start at 30s, max 10 minutes)
-                    base_wait = 30
-                    wait_time = min(base_wait * (2 ** (consecutive_failures - 1)), 600)
-
-                    if retry_count >= max_retries:
-                        logger.warning(
-                            f"Max retries reached. Will keep trying every {wait_time}s until the conflict resolves..."
-                        )
-                        # Reset retry_count to allow continuous retries
-                        retry_count = 0
-
-                    logger.info(f"Waiting {wait_time}s for old connection to timeout...")
-                    await asyncio.sleep(wait_time)
-                    
-            except Exception as e:
-                self._polling_started = False
-                consecutive_failures += 1
-                logger.error(f"Telegram error: {type(e).__name__}: {e}")
-
-                # Clean up completely
-                if self._app:
-                    try:
-                        await self._app.updater.stop()
-                        await self._app.stop()
-                        await self._app.shutdown()
-                    except Exception as cleanup_error:
-                        logger.debug(f"Cleanup error (expected): {cleanup_error}")
-                    self._app = None
-
-                # Enter keep-alive mode with exponential backoff
-                if self._running:
-                    wait_time = min(2 ** consecutive_failures, 300)  # Cap at 5 minutes
-                    logger.warning(
-                        f"Entering keep-alive mode with {wait_time}s backoff. "
-                        "Will continue attempting to reconnect..."
-                    )
-                    await asyncio.sleep(wait_time)
+            await asyncio.sleep(1)
+    
     async def stop(self) -> None:
         """Stop the Telegram bot."""
-        logger.info("Stopping Telegram bot...")
         self._running = False
-        self._polling_started = False
         
         # Cancel all typing indicators
         for chat_id in list(self._typing_tasks):
             self._stop_typing(chat_id)
         
         if self._app:
-            try:
-                await self._app.updater.stop()
-                await self._app.stop()
-                await self._app.shutdown()
-            except Exception as e:
-                logger.debug(f"Cleanup error: {e}")
-            finally:
-                self._app = None
+            logger.info("Stopping Telegram bot...")
+            await self._app.updater.stop()
+            await self._app.stop()
+            await self._app.shutdown()
+            self._app = None
     
     async def send(self, msg: OutboundMessage) -> None:
-        """Send a message through Telegram, splitting if necessary."""
-        if not self._app or not self._polling_started:
-            logger.warning("Telegram bot not ready to send messages")
+        """Send a message through Telegram."""
+        if not self._app:
+            logger.warning("Telegram bot not running")
             return
-
+        
         # Stop typing indicator for this chat
         self._stop_typing(msg.chat_id)
-
+        
         try:
+            # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.chat_id)
+            # Convert markdown to Telegram HTML
             html_content = _markdown_to_telegram_html(msg.content)
-
-            # Split message if it exceeds Telegram's 4096 character limit
-            message_chunks = _split_long_message(html_content, max_length=4096)
-
-            if len(message_chunks) > 1:
-                logger.info(f"Message too long ({len(html_content)} chars), splitting into {len(message_chunks)} parts")
-
-            for i, chunk in enumerate(message_chunks, 1):
-                await self._safe_send_message(chat_id, chunk, i, len(message_chunks))
-
+            await self._app.bot.send_message(
+                chat_id=chat_id,
+                text=html_content,
+                parse_mode="HTML"
+            )
         except ValueError:
             logger.error(f"Invalid chat_id: {msg.chat_id}")
         except Exception as e:
-            logger.error(f"Failed to send message: {e}")
-
-    async def _safe_send_message(self, chat_id: int, text: str, chunk_num: int, total_chunks: int) -> None:
-        """
-        Safely send a message with fallback strategies.
-
-        Tries in order:
-        1. HTML parse mode
-        2. Plain text (no parse mode)
-        3. Truncated plain text if still failing
-        """
-        try:
-            # Try with HTML parse mode
-            await self._app.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="HTML"
-            )
-            return
-        except Exception as html_error:
-            error_msg = str(html_error).lower()
-
-            # Check if it's a parse error
-            if "parse" in error_msg or "entities" in error_msg or "tag" in error_msg:
-                logger.warning(f"HTML parse error in chunk {chunk_num}/{total_chunks}: {html_error}")
-
-                # Try plain text without parse mode
-                try:
-                    await self._app.bot.send_message(
-                        chat_id=chat_id,
-                        text=text
-                    )
-                    logger.info(f"Sent chunk {chunk_num}/{total_chunks} as plain text (HTML parse failed)")
-                    return
-                except Exception as plain_error:
-                    logger.error(f"Plain text send also failed for chunk {chunk_num}/{total_chunks}: {plain_error}")
-
-                    # Last resort: send truncated error message
-                    try:
-                        error_text = f"⚠️ Failed to send message (chunk {chunk_num}/{total_chunks}). Content may contain formatting issues."
-                        await self._app.bot.send_message(
-                            chat_id=chat_id,
-                            text=error_text
-                        )
-                    except Exception:
-                        logger.error(f"Could not send error notification for chunk {chunk_num}/{total_chunks}")
-            else:
-                # Not a parse error, re-raise
-                logger.error(f"Failed to send chunk {chunk_num}/{total_chunks}: {html_error}")
-                raise
+            # Fallback to plain text if HTML parsing fails
+            logger.warning(f"HTML parse failed, falling back to plain text: {e}")
+            try:
+                await self._app.bot.send_message(
+                    chat_id=int(msg.chat_id),
+                    text=msg.content
+                )
+            except Exception as e2:
+                logger.error(f"Error sending Telegram message: {e2}")
     
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
