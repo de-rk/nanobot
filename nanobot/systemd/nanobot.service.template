@@ -1,0 +1,20 @@
+[Unit]
+Description=Nanobot AI Assistant
+After=network.target
+
+[Service]
+Type=simple
+User={user}
+WorkingDirectory={workdir}
+ExecStart={nanobot_path} serve
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/nanobot/stdout.log
+StandardError=append:/var/log/nanobot/stderr.log
+
+# Prevent memory leaks from crashing the system
+MemoryMax=2G
+MemoryHigh=1.5G
+
+[Install]
+WantedBy=multi-user.target

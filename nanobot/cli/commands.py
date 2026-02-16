@@ -751,5 +751,114 @@ def status():
         console.print(f"vLLM/Local: {vllm_status}")
 
 
+# ============================================================================
+# System Service Commands
+# ============================================================================
+
+
+@app.command()
+def install_service(
+    user: str = typer.Option(None, "--user", help="User to run the service as (default: current user)"),
+    workdir: str = typer.Option(None, "--workdir", help="Working directory (default: current directory)"),
+):
+    """Install nanobot as a systemd service."""
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    # Check if running on Linux with systemd
+    if not Path("/etc/systemd/system").exists():
+        console.print("[red]Error: systemd not found. This command only works on Linux with systemd.[/red]")
+        raise typer.Exit(1)
+
+    # Get current user and working directory
+    current_user = user or os.getenv("USER", "root")
+    current_workdir = workdir or os.getcwd()
+
+    # Find nanobot executable
+    nanobot_path = shutil.which("nanobot")
+    if not nanobot_path:
+        console.print("[red]Error: nanobot command not found in PATH[/red]")
+        raise typer.Exit(1)
+
+    # Load template
+    template_path = Path(__file__).parent.parent / "systemd" / "nanobot.service.template"
+    if not template_path.exists():
+        console.print(f"[red]Error: Service template not found at {template_path}[/red]")
+        raise typer.Exit(1)
+
+    template = template_path.read_text()
+
+    # Replace placeholders
+    service_content = template.format(
+        user=current_user,
+        workdir=current_workdir,
+        nanobot_path=nanobot_path
+    )
+
+    # Write to temporary file
+    temp_service = Path("/tmp/nanobot.service")
+    temp_service.write_text(service_content)
+
+    console.print(f"[cyan]Installing nanobot systemd service...[/cyan]")
+    console.print(f"  User: {current_user}")
+    console.print(f"  Working directory: {current_workdir}")
+    console.print(f"  Executable: {nanobot_path}")
+
+    # Create log directory
+    try:
+        subprocess.run(["sudo", "mkdir", "-p", "/var/log/nanobot"], check=True)
+        subprocess.run(["sudo", "chown", current_user, "/var/log/nanobot"], check=True)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[yellow]Warning: Could not create log directory: {e}[/yellow]")
+
+    # Install service
+    try:
+        subprocess.run(["sudo", "cp", str(temp_service), "/etc/systemd/system/nanobot.service"], check=True)
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+        subprocess.run(["sudo", "systemctl", "enable", "nanobot"], check=True)
+
+        console.print("\n[green]✓[/green] Service installed successfully!")
+        console.print("\nNext steps:")
+        console.print("  Start service:  [cyan]sudo systemctl start nanobot[/cyan]")
+        console.print("  Check status:   [cyan]sudo systemctl status nanobot[/cyan]")
+        console.print("  View logs:      [cyan]sudo journalctl -u nanobot -f[/cyan]")
+        console.print("  Stop service:   [cyan]sudo systemctl stop nanobot[/cyan]")
+        console.print("  Disable:        [cyan]sudo systemctl disable nanobot[/cyan]")
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Error installing service: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def uninstall_service():
+    """Uninstall nanobot systemd service."""
+    import subprocess
+    from pathlib import Path
+
+    if not Path("/etc/systemd/system/nanobot.service").exists():
+        console.print("[yellow]Service not installed[/yellow]")
+        raise typer.Exit(0)
+
+    console.print("[cyan]Uninstalling nanobot systemd service...[/cyan]")
+
+    try:
+        # Stop and disable service
+        subprocess.run(["sudo", "systemctl", "stop", "nanobot"], check=False)
+        subprocess.run(["sudo", "systemctl", "disable", "nanobot"], check=False)
+
+        # Remove service file
+        subprocess.run(["sudo", "rm", "/etc/systemd/system/nanobot.service"], check=True)
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+
+        console.print("[green]✓[/green] Service uninstalled successfully!")
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Error uninstalling service: {e}[/red]")
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()
