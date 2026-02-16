@@ -426,9 +426,15 @@ Respond with ONLY valid JSON, no markdown fences."""
                 return
             if text.startswith("```"):
                 text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            result = json_repair.loads(text)
+
+            try:
+                result = json_repair.loads(text)
+            except Exception as parse_err:
+                logger.warning(f"Memory consolidation: failed to parse JSON response: {parse_err}")
+                return
+
             if not isinstance(result, dict):
-                logger.warning(f"Memory consolidation: unexpected response type, skipping. Response: {text[:200]}")
+                logger.warning(f"Memory consolidation: unexpected response type (expected dict, got {type(result).__name__}), skipping")
                 return
 
             if entry := result.get("history_entry"):

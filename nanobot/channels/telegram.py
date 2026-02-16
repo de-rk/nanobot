@@ -190,30 +190,69 @@ class TelegramChannel(BaseChannel):
         if not self._app:
             logger.warning("Telegram bot not running")
             return
-        
+
         # Stop typing indicator for this chat
         self._stop_typing(msg.chat_id)
-        
+
         try:
             # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.chat_id)
             # Convert markdown to Telegram HTML
             html_content = _markdown_to_telegram_html(msg.content)
-            await self._app.bot.send_message(
-                chat_id=chat_id,
-                text=html_content,
-                parse_mode="HTML"
-            )
+
+            # Telegram message limit is 4096 characters
+            MAX_LENGTH = 4096
+            if len(html_content) <= MAX_LENGTH:
+                await self._app.bot.send_message(
+                    chat_id=chat_id,
+                    text=html_content,
+                    parse_mode="HTML"
+                )
+            else:
+                # Split message into chunks
+                chunks = []
+                current_chunk = ""
+                for line in html_content.split('\n'):
+                    if len(current_chunk) + len(line) + 1 <= MAX_LENGTH:
+                        current_chunk += line + '\n'
+                    else:
+                        if current_chunk:
+                            chunks.append(current_chunk.rstrip())
+                        current_chunk = line + '\n'
+                if current_chunk:
+                    chunks.append(current_chunk.rstrip())
+
+                # Send chunks
+                for i, chunk in enumerate(chunks):
+                    if i > 0:
+                        await asyncio.sleep(0.5)  # Small delay between messages
+                    await self._app.bot.send_message(
+                        chat_id=chat_id,
+                        text=chunk,
+                        parse_mode="HTML"
+                    )
         except ValueError:
             logger.error(f"Invalid chat_id: {msg.chat_id}")
         except Exception as e:
             # Fallback to plain text if HTML parsing fails
             logger.warning(f"HTML parse failed, falling back to plain text: {e}")
             try:
-                await self._app.bot.send_message(
-                    chat_id=int(msg.chat_id),
-                    text=msg.content
-                )
+                content = msg.content
+                MAX_LENGTH = 4096
+                if len(content) <= MAX_LENGTH:
+                    await self._app.bot.send_message(
+                        chat_id=int(msg.chat_id),
+                        text=content
+                    )
+                else:
+                    # Split plain text into chunks
+                    for i in range(0, len(content), MAX_LENGTH):
+                        if i > 0:
+                            await asyncio.sleep(0.5)
+                        await self._app.bot.send_message(
+                            chat_id=int(msg.chat_id),
+                            text=content[i:i+MAX_LENGTH]
+                        )
             except Exception as e2:
                 logger.error(f"Error sending Telegram message: {e2}")
     
