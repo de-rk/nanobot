@@ -30,6 +30,16 @@ CURRENT_USER=$(whoami)
 NANOBOT_DIR=$(pwd)
 NANOBOT_BIN=$(which nanobot 2>/dev/null || echo "")
 
+# Determine home directory
+if [ "$CURRENT_USER" = "root" ]; then
+    USER_HOME="/root"
+else
+    USER_HOME="$HOME"
+fi
+
+# Log directory in nanobot workspace
+LOG_DIR="$USER_HOME/.nanobot/workspace/logs"
+
 if [ -z "$NANOBOT_BIN" ]; then
     echo -e "${RED}Error: nanobot command not found in PATH${NC}"
     echo "Please install nanobot first:"
@@ -40,8 +50,10 @@ fi
 
 echo -e "${BLUE}Configuration:${NC}"
 echo "  User: $CURRENT_USER"
+echo "  Home: $USER_HOME"
 echo "  Working Directory: $NANOBOT_DIR"
 echo "  Nanobot Binary: $NANOBOT_BIN"
+echo "  Log Directory: $LOG_DIR"
 echo ""
 
 # Check if service already exists
@@ -59,9 +71,8 @@ fi
 
 # Create log directory
 echo -e "${YELLOW}Creating log directory...${NC}"
-sudo mkdir -p /var/log/nanobot
-sudo chown $CURRENT_USER:$CURRENT_USER /var/log/nanobot
-echo -e "${GREEN}✓${NC} Log directory created"
+mkdir -p "$LOG_DIR"
+echo -e "${GREEN}✓${NC} Log directory created at $LOG_DIR""
 
 # Generate service file from template
 echo -e "${YELLOW}Generating service file...${NC}"
@@ -78,8 +89,8 @@ WorkingDirectory=$NANOBOT_DIR
 ExecStart=$NANOBOT_BIN gateway
 Restart=always
 RestartSec=10
-StandardOutput=append:/var/log/nanobot/stdout.log
-StandardError=append:/var/log/nanobot/stderr.log
+StandardOutput=append:$LOG_DIR/service.log
+StandardError=append:$LOG_DIR/service-error.log
 
 # Prevent memory leaks from crashing the system
 MemoryMax=2G
@@ -134,7 +145,9 @@ echo "  Restart:       ${GREEN}sudo systemctl restart nanobot${NC}"
 echo "  Disable:       ${GREEN}sudo systemctl disable nanobot${NC}"
 echo ""
 echo -e "${BLUE}Log files:${NC}"
-echo "  stdout: /var/log/nanobot/stdout.log"
-echo "  stderr: /var/log/nanobot/stderr.log"
+echo "  Application log: $LOG_DIR/nanobot.log (from nanobot gateway)"
+echo "  Service stdout:  $LOG_DIR/service.log"
+echo "  Service stderr:  $LOG_DIR/service-error.log"
 echo ""
 echo -e "${YELLOW}Note:${NC} The service has memory limits (2GB max) to prevent system crashes."
+echo -e "${YELLOW}Note:${NC} Service logs are separate from application logs (nanobot.log)."

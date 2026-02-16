@@ -471,7 +471,7 @@ sudo systemctl status nanobot
 
 Both methods will:
 - Detect your current user and nanobot installation path
-- Create log directory at `/var/log/nanobot`
+- Create log directory at `~/.nanobot/workspace/logs`
 - Generate and install systemd service file with memory limits (2GB max)
 - Enable and start the service automatically
 
@@ -485,8 +485,9 @@ sudo systemctl status nanobot
 sudo journalctl -u nanobot -f
 
 # View log files
-tail -f /var/log/nanobot/stdout.log
-tail -f /var/log/nanobot/stderr.log
+tail -f ~/.nanobot/workspace/logs/nanobot.log        # Application log
+tail -f ~/.nanobot/workspace/logs/service.log        # Service stdout
+tail -f ~/.nanobot/workspace/logs/service-error.log  # Service stderr
 
 # Restart service
 sudo systemctl restart nanobot
@@ -504,6 +505,11 @@ nanobot uninstall-service
 > [!NOTE]
 > The service runs `nanobot gateway` command, which starts the gateway and all enabled channels.
 > Memory limits (2GB max, 1.5GB high) are configured to prevent system crashes from memory leaks.
+>
+> **Log files:**
+> - `~/.nanobot/workspace/logs/nanobot.log` - Application log (from nanobot gateway)
+> - `~/.nanobot/workspace/logs/service.log` - Service stdout
+> - `~/.nanobot/workspace/logs/service-error.log` - Service stderr
 
 ## 📁 Project Structure
 

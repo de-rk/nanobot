@@ -38,8 +38,15 @@ nanobot uninstall-service
 
 - **Auto-restart**: Service automatically restarts on failure
 - **Memory limits**: Prevents memory leaks from crashing the system (2GB max)
-- **Logging**: Logs to `/var/log/nanobot/` and systemd journal
+- **Logging**: Logs to `~/.nanobot/workspace/logs/` (separate from application logs)
 - **Clean shutdown**: Properly stops all channels and services
+
+## Log Files
+
+The service creates separate log files in `~/.nanobot/workspace/logs/`:
+- `nanobot.log` - Application log (from nanobot gateway)
+- `service.log` - Service stdout
+- `service-error.log` - Service stderr
 
 ## Manual Installation
 
@@ -54,6 +61,7 @@ If you prefer to install manually:
    - `{user}` - User to run as
    - `{workdir}` - Working directory
    - `{nanobot_path}` - Path to nanobot executable
+   - `{log_dir}` - Log directory path (e.g., /root/.nanobot/workspace/logs)
 
 3. Enable and start:
    ```bash

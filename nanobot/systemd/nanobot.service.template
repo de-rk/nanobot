@@ -9,8 +9,8 @@ WorkingDirectory={workdir}
 ExecStart={nanobot_path} gateway
 Restart=always
 RestartSec=10
-StandardOutput=append:/var/log/nanobot/stdout.log
-StandardError=append:/var/log/nanobot/stderr.log
+StandardOutput=append:{log_dir}/service.log
+StandardError=append:{log_dir}/service-error.log
 
 # Prevent memory leaks from crashing the system
 MemoryMax=2G

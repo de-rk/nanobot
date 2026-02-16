@@ -776,6 +776,14 @@ def install_service(
     current_user = user or os.getenv("USER", "root")
     current_workdir = workdir or os.getcwd()
 
+    # Determine home directory for log path
+    if current_user == "root":
+        user_home = "/root"
+    else:
+        user_home = os.path.expanduser(f"~{current_user}")
+
+    log_dir = f"{user_home}/.nanobot/workspace/logs"
+
     # Find nanobot executable
     nanobot_path = shutil.which("nanobot")
     if not nanobot_path:
@@ -794,7 +802,8 @@ def install_service(
     service_content = template.format(
         user=current_user,
         workdir=current_workdir,
-        nanobot_path=nanobot_path
+        nanobot_path=nanobot_path,
+        log_dir=log_dir
     )
 
     # Write to temporary file
@@ -805,12 +814,13 @@ def install_service(
     console.print(f"  User: {current_user}")
     console.print(f"  Working directory: {current_workdir}")
     console.print(f"  Executable: {nanobot_path}")
+    console.print(f"  Log directory: {log_dir}")
 
     # Create log directory
     try:
-        subprocess.run(["sudo", "mkdir", "-p", "/var/log/nanobot"], check=True)
-        subprocess.run(["sudo", "chown", current_user, "/var/log/nanobot"], check=True)
-    except subprocess.CalledProcessError as e:
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        console.print(f"[green]✓[/green] Log directory created at {log_dir}")
+    except Exception as e:
         console.print(f"[yellow]Warning: Could not create log directory: {e}[/yellow]")
 
     # Install service

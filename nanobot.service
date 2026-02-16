@@ -9,8 +9,8 @@ WorkingDirectory=/path/to/nanobot
 ExecStart=/usr/local/bin/nanobot gateway
 Restart=always
 RestartSec=10
-StandardOutput=append:/var/log/nanobot/stdout.log
-StandardError=append:/var/log/nanobot/stderr.log
+StandardOutput=append:/root/.nanobot/workspace/logs/service.log
+StandardError=append:/root/.nanobot/workspace/logs/service-error.log
 
 # Environment variables (if needed)
 # Environment="NANOBOT_CONFIG=/path/to/config.json"
