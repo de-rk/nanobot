@@ -544,33 +544,11 @@ def agent(
     if message:
         # Single message mode
         async def run_once():
-            response = await agent_loop.process_direct(message, session_id)
-            console.print(f"\n{__logo__} {response}")
-
-        asyncio.run(run_once())
-    else:
-        # Interactive mode
-        console.print(f"{__logo__} Interactive mode (Ctrl+C to exit)\n")
-
-        async def run_interactive():
-            while True:
-                try:
-                    user_input = console.input("[bold blue]You:[/bold blue] ")
-                    if not user_input.strip():
-                        continue
-
-                    response = await agent_loop.process_direct(user_input, session_id)
-                    console.print(f"\n{__logo__} {response}\n")
-                except KeyboardInterrupt:
-                    console.print("\nGoodbye!")
-                    break
-
-=======
             with _thinking_ctx():
                 response = await agent_loop.process_direct(message, session_id)
             _print_agent_response(response, render_markdown=markdown)
             await agent_loop.close_mcp()
-        
+
         asyncio.run(run_once())
     else:
         # Interactive mode
@@ -583,7 +561,7 @@ def agent(
             os._exit(0)
 
         signal.signal(signal.SIGINT, _exit_on_sigint)
-        
+
         async def run_interactive():
             try:
                 while True:
@@ -598,7 +576,7 @@ def agent(
                             _restore_terminal()
                             console.print("\nGoodbye!")
                             break
-                        
+
                         with _thinking_ctx():
                             response = await agent_loop.process_direct(user_input, session_id)
                         _print_agent_response(response, render_markdown=markdown)
@@ -612,8 +590,7 @@ def agent(
                         break
             finally:
                 await agent_loop.close_mcp()
-        
->>>>>>> upstream/main
+
         asyncio.run(run_interactive())
 
 
