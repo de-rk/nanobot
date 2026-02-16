@@ -70,10 +70,10 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=(),
         env_key="OPENAI_API_KEY",
         display_name="Custom",
-        litellm_prefix="openai",
-        skip_prefixes=("openai/",),
+        litellm_prefix="",
+        skip_prefixes=(),
         is_gateway=True,
-        strip_model_prefix=True,
+        strip_model_prefix=False,
     ),
 
     # === Gateways (detected by api_key / api_base, not model name) =========
