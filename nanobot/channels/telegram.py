@@ -382,42 +382,73 @@ class TelegramChannel(BaseChannel):
         if not self._app or not self._polling_started:
             logger.warning("Telegram bot not ready to send messages")
             return
-        
+
         try:
             chat_id = int(msg.chat_id)
             html_content = _markdown_to_telegram_html(msg.content)
-            
+
             # Split message if it exceeds Telegram's 4096 character limit
             message_chunks = _split_long_message(html_content, max_length=4096)
-            
+
             if len(message_chunks) > 1:
                 logger.info(f"Message too long ({len(html_content)} chars), splitting into {len(message_chunks)} parts")
-            
+
             for i, chunk in enumerate(message_chunks, 1):
-                try:
-                    await self._app.bot.send_message(
-                        chat_id=chat_id,
-                        text=chunk,
-                        parse_mode="HTML"
-                    )
-                except Exception as chunk_error:
-                    # If HTML formatting fails, try plain text
-                    if "parse mode" in str(chunk_error).lower():
-                        try:
-                            await self._app.bot.send_message(
-                                chat_id=chat_id,
-                                text=chunk
-                            )
-                        except Exception as plain_error:
-                            logger.error(f"Failed to send message chunk {i}/{len(message_chunks)}: {plain_error}")
-                            raise
-                    else:
-                        raise
-                        
+                await self._safe_send_message(chat_id, chunk, i, len(message_chunks))
+
         except ValueError:
             logger.error(f"Invalid chat_id: {msg.chat_id}")
         except Exception as e:
             logger.error(f"Failed to send message: {e}")
+
+    async def _safe_send_message(self, chat_id: int, text: str, chunk_num: int, total_chunks: int) -> None:
+        """
+        Safely send a message with fallback strategies.
+
+        Tries in order:
+        1. HTML parse mode
+        2. Plain text (no parse mode)
+        3. Truncated plain text if still failing
+        """
+        try:
+            # Try with HTML parse mode
+            await self._app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="HTML"
+            )
+            return
+        except Exception as html_error:
+            error_msg = str(html_error).lower()
+
+            # Check if it's a parse error
+            if "parse" in error_msg or "entities" in error_msg or "tag" in error_msg:
+                logger.warning(f"HTML parse error in chunk {chunk_num}/{total_chunks}: {html_error}")
+
+                # Try plain text without parse mode
+                try:
+                    await self._app.bot.send_message(
+                        chat_id=chat_id,
+                        text=text
+                    )
+                    logger.info(f"Sent chunk {chunk_num}/{total_chunks} as plain text (HTML parse failed)")
+                    return
+                except Exception as plain_error:
+                    logger.error(f"Plain text send also failed for chunk {chunk_num}/{total_chunks}: {plain_error}")
+
+                    # Last resort: send truncated error message
+                    try:
+                        error_text = f"⚠️ Failed to send message (chunk {chunk_num}/{total_chunks}). Content may contain formatting issues."
+                        await self._app.bot.send_message(
+                            chat_id=chat_id,
+                            text=error_text
+                        )
+                    except Exception:
+                        logger.error(f"Could not send error notification for chunk {chunk_num}/{total_chunks}")
+            else:
+                # Not a parse error, re-raise
+                logger.error(f"Failed to send chunk {chunk_num}/{total_chunks}: {html_error}")
+                raise
     
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
