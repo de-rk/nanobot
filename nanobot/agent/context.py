@@ -2,6 +2,7 @@
 
 import base64
 import mimetypes
+import platform
 from pathlib import Path
 from typing import Any
 
@@ -72,8 +73,12 @@ Skills with available="false" need dependencies installed first - you can try in
     def _get_identity(self) -> str:
         """Get the core identity section."""
         from datetime import datetime
+        import time as _time
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
+        tz = _time.strftime("%Z") or "UTC"
         workspace_path = str(self.workspace.expanduser().resolve())
+        system = platform.system()
+        runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
         
         return f"""# nanobot 🐈
 
@@ -85,20 +90,24 @@ You are nanobot, a helpful AI assistant. You have access to tools that allow you
 - Spawn subagents for complex background tasks
 
 ## Current Time
-{now}
+{now} ({tz})
+
+## Runtime
+{runtime}
 
 ## Workspace
 Your workspace is at: {workspace_path}
-- Memory files: {workspace_path}/memory/MEMORY.md
-- Daily notes: {workspace_path}/memory/YYYY-MM-DD.md
+- Long-term memory: {workspace_path}/memory/MEMORY.md
+- History log: {workspace_path}/memory/HISTORY.md (grep-searchable)
 - Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
 
 IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
 Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
 For normal conversation, just respond with text - do not call the message tool.
 
-Always be helpful, accurate, and concise. When using tools, explain what you're doing.
-When remembering something, write to {workspace_path}/memory/MEMORY.md"""
+Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
+When remembering something important, write to {workspace_path}/memory/MEMORY.md
+To recall past events, grep {workspace_path}/memory/HISTORY.md"""
     
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""
@@ -118,6 +127,8 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
         current_message: str,
         skill_names: list[str] | None = None,
         media: list[str] | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -127,6 +138,8 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
             current_message: The new user message.
             skill_names: Optional skills to include.
             media: Optional list of local file paths for images/media.
+            channel: Current channel (telegram, feishu, etc.).
+            chat_id: Current chat/user ID.
 
         Returns:
             List of messages including system prompt.
@@ -135,6 +148,8 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
 
         # System prompt
         system_prompt = self.build_system_prompt(skill_names)
+        if channel and chat_id:
+            system_prompt += f"\n\n## Current Session\nChannel: {channel}\nChat ID: {chat_id}"
         messages.append({"role": "system", "content": system_prompt})
 
         # History
@@ -195,7 +210,8 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
         self,
         messages: list[dict[str, Any]],
         content: str | None,
-        tool_calls: list[dict[str, Any]] | None = None
+        tool_calls: list[dict[str, Any]] | None = None,
+        reasoning_content: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Add an assistant message to the message list.
@@ -204,6 +220,7 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
             messages: Current message list.
             content: Message content.
             tool_calls: Optional tool calls.
+            reasoning_content: Thinking output (Kimi, DeepSeek-R1, etc.).
         
         Returns:
             Updated message list.
@@ -212,6 +229,10 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
         
         if tool_calls:
             msg["tool_calls"] = tool_calls
+        
+        # Thinking models reject history without this
+        if reasoning_content:
+            msg["reasoning_content"] = reasoning_content
         
         messages.append(msg)
         return messages

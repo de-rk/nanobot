@@ -14,5 +14,10 @@ docs/
 *.pywz
 *.pyzz
 .venv/
+venv/
 __pycache__/
 .DS_Store
+poetry.lock
+.pytest_cache/
+botpy.log
+tests/

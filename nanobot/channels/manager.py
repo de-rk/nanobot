@@ -1,5 +1,7 @@
 """Channel manager for coordinating chat channels."""
 
+from __future__ import annotations
+
 import asyncio
 from typing import Any
 
@@ -55,6 +57,17 @@ class ChannelManager:
                 logger.info("WhatsApp channel enabled")
             except ImportError as e:
                 logger.warning(f"WhatsApp channel not available: {e}")
+
+        # Discord channel
+        if self.config.channels.discord.enabled:
+            try:
+                from nanobot.channels.discord import DiscordChannel
+                self.channels["discord"] = DiscordChannel(
+                    self.config.channels.discord, self.bus
+                )
+                logger.info("Discord channel enabled")
+            except ImportError as e:
+                logger.warning(f"Discord channel not available: {e}")
         
         # Feishu channel
         if self.config.channels.feishu.enabled:
@@ -66,7 +79,71 @@ class ChannelManager:
                 logger.info("Feishu channel enabled")
             except ImportError as e:
                 logger.warning(f"Feishu channel not available: {e}")
+
+        # Mochat channel
+        if self.config.channels.mochat.enabled:
+            try:
+                from nanobot.channels.mochat import MochatChannel
+
+                self.channels["mochat"] = MochatChannel(
+                    self.config.channels.mochat, self.bus
+                )
+                logger.info("Mochat channel enabled")
+            except ImportError as e:
+                logger.warning(f"Mochat channel not available: {e}")
+
+        # DingTalk channel
+        if self.config.channels.dingtalk.enabled:
+            try:
+                from nanobot.channels.dingtalk import DingTalkChannel
+                self.channels["dingtalk"] = DingTalkChannel(
+                    self.config.channels.dingtalk, self.bus
+                )
+                logger.info("DingTalk channel enabled")
+            except ImportError as e:
+                logger.warning(f"DingTalk channel not available: {e}")
+
+        # Email channel
+        if self.config.channels.email.enabled:
+            try:
+                from nanobot.channels.email import EmailChannel
+                self.channels["email"] = EmailChannel(
+                    self.config.channels.email, self.bus
+                )
+                logger.info("Email channel enabled")
+            except ImportError as e:
+                logger.warning(f"Email channel not available: {e}")
+
+        # Slack channel
+        if self.config.channels.slack.enabled:
+            try:
+                from nanobot.channels.slack import SlackChannel
+                self.channels["slack"] = SlackChannel(
+                    self.config.channels.slack, self.bus
+                )
+                logger.info("Slack channel enabled")
+            except ImportError as e:
+                logger.warning(f"Slack channel not available: {e}")
+
+        # QQ channel
+        if self.config.channels.qq.enabled:
+            try:
+                from nanobot.channels.qq import QQChannel
+                self.channels["qq"] = QQChannel(
+                    self.config.channels.qq,
+                    self.bus,
+                )
+                logger.info("QQ channel enabled")
+            except ImportError as e:
+                logger.warning(f"QQ channel not available: {e}")
     
+    async def _start_channel(self, name: str, channel: BaseChannel) -> None:
+        """Start a channel and log any exceptions."""
+        try:
+            await channel.start()
+        except Exception as e:
+            logger.error(f"Failed to start channel {name}: {e}")
+
     async def start_all(self) -> None:
         """Start all channels and the outbound dispatcher."""
         if not self.channels:
