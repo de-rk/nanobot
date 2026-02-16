@@ -253,7 +253,8 @@ class TelegramChannel(BaseChannel):
             logger.error(f"Invalid chat_id: {msg.chat_id}")
         except Exception as e:
             # Fallback to plain text if HTML parsing fails
-            logger.warning(f"HTML parse failed, falling back to plain text: {e}")
+            error_msg = str(e)
+            logger.warning(f"HTML parse failed, falling back to plain text: {error_msg}")
             try:
                 content = msg.content
                 MAX_LENGTH = 4096
@@ -267,9 +268,15 @@ class TelegramChannel(BaseChannel):
                     for i in range(0, len(content), MAX_LENGTH):
                         if i > 0:
                             await asyncio.sleep(0.5)
+                        chunk = content[i:i+MAX_LENGTH]
+                        # Ensure we don't break in the middle of a line if possible
+                        if i + MAX_LENGTH < len(content):
+                            last_newline = chunk.rfind('\n')
+                            if last_newline > MAX_LENGTH * 0.8:  # Only if we're not losing too much
+                                chunk = chunk[:last_newline]
                         await self._app.bot.send_message(
                             chat_id=int(msg.chat_id),
-                            text=content[i:i+MAX_LENGTH]
+                            text=chunk
                         )
             except Exception as e2:
                 logger.error(f"Error sending Telegram message: {e2}")
