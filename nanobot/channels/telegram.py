@@ -138,11 +138,18 @@ class TelegramChannel(BaseChannel):
         )
         
         logger.info("Starting Telegram bot (polling mode)...")
-        
+
         # Initialize and start polling
         await self._app.initialize()
         await self._app.start()
-        
+
+        # Clear any existing webhooks to prevent conflicts
+        try:
+            await self._app.bot.delete_webhook(drop_pending_updates=True)
+            logger.debug("Cleared any existing webhooks")
+        except Exception as e:
+            logger.warning(f"Failed to clear webhooks: {e}")
+
         # Get bot info and register command menu
         bot_info = await self._app.bot.get_me()
         logger.info(f"Telegram bot @{bot_info.username} connected")
