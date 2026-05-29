@@ -52,7 +52,10 @@ class LiteLLMProvider(LLMProvider):
             if self._gateway.strip_model_prefix and "/" in model:
                 return model.split("/")[-1]
             return model
-        # Direct provider: strip any leading provider/ namespace
+        # Custom api_base: user controls the endpoint, pass model name as-is
+        if self.api_base:
+            return model
+        # Direct registry provider: strip routing namespace (e.g. "anthropic/claude-3" → "claude-3")
         if "/" in model:
             return model.split("/")[-1]
         return model
