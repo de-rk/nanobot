@@ -119,7 +119,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
 
     # === Standard providers (matched by model-name keywords) ===============
 
-    # Anthropic: LiteLLM recognizes "claude-*" natively, no prefix needed.
+    # Anthropic: direct API, OpenAI-compatible endpoint.
     ProviderSpec(
         name="anthropic",
         keywords=("anthropic", "claude"),
@@ -132,15 +132,15 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
+        default_api_base="https://api.anthropic.com/v1",
         strip_model_prefix=False,
         model_overrides=(),
     ),
 
-    # OpenAI: LiteLLM recognizes "gpt-*" natively, no prefix needed.
+    # OpenAI: SDK defaults to api.openai.com/v1, no base URL needed.
     ProviderSpec(
         name="openai",
-        keywords=("openai", "gpt"),
+        keywords=("openai", "gpt", "o1", "o3", "o4"),
         env_key="OPENAI_API_KEY",
         display_name="OpenAI",
         litellm_prefix="",
@@ -155,51 +155,49 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
     ),
 
-    # DeepSeek: needs "deepseek/" prefix for LiteLLM routing.
+    # DeepSeek: OpenAI-compatible API.
     ProviderSpec(
         name="deepseek",
         keywords=("deepseek",),
         env_key="DEEPSEEK_API_KEY",
         display_name="DeepSeek",
-        litellm_prefix="deepseek",          # deepseek-chat → deepseek/deepseek-chat
-        skip_prefixes=("deepseek/",),       # avoid double-prefix
+        litellm_prefix="deepseek",
+        skip_prefixes=("deepseek/",),
         env_extras=(),
         is_gateway=False,
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
+        default_api_base="https://api.deepseek.com/v1",
         strip_model_prefix=False,
         model_overrides=(),
     ),
 
-    # Gemini: needs "gemini/" prefix for LiteLLM.
+    # Gemini: OpenAI-compatible endpoint (v1beta).
     ProviderSpec(
         name="gemini",
         keywords=("gemini",),
         env_key="GEMINI_API_KEY",
         display_name="Gemini",
-        litellm_prefix="gemini",            # gemini-pro → gemini/gemini-pro
-        skip_prefixes=("gemini/",),         # avoid double-prefix
+        litellm_prefix="gemini",
+        skip_prefixes=("gemini/",),
         env_extras=(),
         is_gateway=False,
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
+        default_api_base="https://generativelanguage.googleapis.com/v1beta/openai/",
         strip_model_prefix=False,
         model_overrides=(),
     ),
 
-    # Zhipu: LiteLLM uses "zai/" prefix.
-    # Also mirrors key to ZHIPUAI_API_KEY (some LiteLLM paths check that).
-    # skip_prefixes: don't add "zai/" when already routed via gateway.
+    # Zhipu: BigModel OpenAI-compatible API.
     ProviderSpec(
         name="zhipu",
         keywords=("zhipu", "glm", "zai"),
         env_key="ZAI_API_KEY",
         display_name="Zhipu AI",
-        litellm_prefix="zai",              # glm-4 → zai/glm-4
+        litellm_prefix="zai",
         skip_prefixes=("zhipu/", "zai/", "openrouter/", "hosted_vllm/"),
         env_extras=(
             ("ZHIPUAI_API_KEY", "{api_key}"),
@@ -208,25 +206,25 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
+        default_api_base="https://open.bigmodel.cn/api/paas/v4/",
         strip_model_prefix=False,
         model_overrides=(),
     ),
 
-    # DashScope: Qwen models, needs "dashscope/" prefix.
+    # DashScope: Qwen models, OpenAI-compatible mode.
     ProviderSpec(
         name="dashscope",
         keywords=("qwen", "dashscope"),
         env_key="DASHSCOPE_API_KEY",
         display_name="DashScope",
-        litellm_prefix="dashscope",         # qwen-max → dashscope/qwen-max
+        litellm_prefix="dashscope",
         skip_prefixes=("dashscope/", "openrouter/"),
         env_extras=(),
         is_gateway=False,
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
+        default_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
         strip_model_prefix=False,
         model_overrides=(),
     ),
@@ -311,7 +309,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
+        default_api_base="https://api.groq.com/openai/v1",
         strip_model_prefix=False,
         model_overrides=(),
     ),
